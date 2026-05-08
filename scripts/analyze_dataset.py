@@ -30,6 +30,15 @@ def _iter_ingredient_steps(trace: Dict[str, Any]) -> List[Dict[str, Any]]:
     return []
 
 
+def count_non_empty_lines(path: Path) -> int:
+    n = 0
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                n += 1
+    return n
+
+
 def load_jsonl(path: Path) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
     with path.open("r", encoding="utf-8") as f:
@@ -78,9 +87,31 @@ def check_citation_accuracy(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Quick quality report for synthetic CoT dataset")
-    parser.add_argument("--dataset-path", type=Path, default=DEFAULT_DATASET_PATH)
-    parser.add_argument("--additives-cache", type=Path, default=EU_ADDITIVES_CACHE)
+    parser = argparse.ArgumentParser(
+        description=(
+            "TruthBite synthetic dataset QA: NOVA distribution, validation flags, and step-level E-number "
+            "citation checks against the local additives cache. Run after generate_dataset.py (e.g. next morning)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Example:\n"
+            "  python scripts/analyze_dataset.py --dataset-path data/processed/synthetic_cot_dataset.jsonl\n"
+        ),
+    )
+    parser.add_argument(
+        "--dataset-path",
+        type=Path,
+        default=DEFAULT_DATASET_PATH,
+        metavar="PATH",
+        help="JSON Lines file from generate_dataset.py (default: data/processed/synthetic_cot_dataset.jsonl).",
+    )
+    parser.add_argument(
+        "--additives-cache",
+        type=Path,
+        default=EU_ADDITIVES_CACHE,
+        metavar="PATH",
+        help="Normalized additives JSON cache (default: data/raw/eu_food_additives.json).",
+    )
     args = parser.parse_args()
 
     if not args.dataset_path.exists():
@@ -88,6 +119,7 @@ def main() -> None:
     if not args.additives_cache.exists():
         raise FileNotFoundError(f"Additives cache not found: {args.additives_cache}")
 
+    line_estimate = count_non_empty_lines(args.dataset_path)
     records = load_jsonl(args.dataset_path)
     additives = json.loads(args.additives_cache.read_text(encoding="utf-8"))
 
@@ -108,6 +140,8 @@ def main() -> None:
 
     print("=== TruthBite Synthetic Dataset Report ===")
     print(f"Dataset: {args.dataset_path}")
+    if line_estimate != total:
+        print(f"Warning: non-empty lines={line_estimate}, parsed records={total} (some lines may be invalid JSON).")
     print(f"Records: {total}")
     print("")
     print("NOVA distribution (ground-truth):")

@@ -44,6 +44,32 @@ Prerequisites: Python 3.11+, [Docker Desktop](https://www.docker.com/products/do
 
    **Why the Ollama-generated file is not on GitHub:** the real output path `data/processed/synthetic_cot_dataset.jsonl` is listed in `.gitignore` (it can grow large and is easy to regenerate). The JSON Lines **schema** is illustrated in `examples/synthetic_cot_sample.jsonl`. For collaboration, share a full export via cloud storage or run the same command locally.
 
+### **Overnight generation (RTX 5060 8GB, ~2000–3000 rows)**
+
+Prerequisites: Ollama running with `llama3.1:8b` pulled, `openfoodfacts.parquet` in `data/raw/`, laptop plugged in and sleep disabled for the session.
+
+The script **appends** to the JSONL file, **resumes** on restart (skips `source_key` values already present), **retries** failed Ollama calls, runs **GC every 100 LLM calls**, prints a **summary every 50 products**, and with **`--shutdown`** writes `data/processed/generate_dataset_done.txt` when the run finishes.
+
+**Exactly 2500 validated traces:**
+
+```bash
+python scripts/generate_dataset.py --open-food-facts-path "data/raw/openfoodfacts.parquet" --target-count 2500 --limit 15000 --sample-seed 42 --stratify-by-nova --seed 7 --batch-size 2 --num-ctx 8192 --model-name "llama3.1:8b" --ollama-timeout 600 --max-retries 3 --gc-interval 100 --gc-sleep 0.5 --progress-interval 50 --shutdown
+```
+
+**Exactly 3000 validated traces:**
+
+```bash
+python scripts/generate_dataset.py --open-food-facts-path "data/raw/openfoodfacts.parquet" --target-count 3000 --limit 20000 --sample-seed 42 --stratify-by-nova --seed 7 --batch-size 2 --num-ctx 8192 --model-name "llama3.1:8b" --ollama-timeout 600 --max-retries 3 --gc-interval 100 --gc-sleep 0.5 --progress-interval 50 --shutdown
+```
+
+**Next morning — quality report:**
+
+```bash
+python scripts/analyze_dataset.py --dataset-path "data/processed/synthetic_cot_dataset.jsonl"
+```
+
+If `data/processed/generate_dataset_done.txt` exists and `status=complete`, the overnight job reached the target row count.
+
 Use `python scripts/data_pipeline.py --help` and `python scripts/generate_dataset.py --help` for all options.
 
 ## **Team handover**

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import random
 import re
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -213,6 +216,80 @@ def verify_enumber_citations(trace: Dict[str, Any], eu_additives: Dict[str, Dict
     return len(errors) == 0, errors
 
 
+def _write_shutdown_marker(
+    *,
+    shutdown_file: Path,
+    output_path: Path,
+    target_count: int,
+    final_accepted: int,
+    session_rejected: int,
+    session_products: int,
+    llm_calls: int,
+    status: str,
+    exhausted: bool,
+) -> None:
+    shutdown_file.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f"status={status}",
+        f"exhausted_pool={exhausted}",
+        f"completed_at_utc={datetime.now(timezone.utc).isoformat()}",
+        f"target_count={target_count}",
+        f"final_accepted_rows={final_accepted}",
+        f"output_path={output_path.resolve()}",
+        f"session_products_tried={session_products}",
+        f"session_rejected_products={session_rejected}",
+        f"total_llm_http_calls={llm_calls}",
+    ]
+    shutdown_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Shutdown marker written: {shutdown_file.resolve()}")
+
+
+def _ollama_chat_with_retries(
+    client: ollama.Client,
+    *,
+    model_name: str,
+    messages: List[Dict[str, str]],
+    options: Dict[str, Any],
+    max_retries: int,
+    llm_call_counter: List[int],
+    gc_interval: int,
+    gc_sleep: float,
+) -> Tuple[Optional[str], bool]:
+    """
+    Returns (raw_text or None if all retries exhausted, had_any_response).
+    Increments llm_call_counter[0] per HTTP call; runs gc periodically.
+    """
+    last_text: Optional[str] = None
+    for attempt in range(max_retries):
+        try:
+            resp = client.chat(
+                model=model_name,
+                messages=messages,
+                options=options,
+            )
+            llm_call_counter[0] += 1
+            if gc_interval > 0 and llm_call_counter[0] % gc_interval == 0:
+                gc.collect()
+                if gc_sleep > 0:
+                    time.sleep(gc_sleep)
+            raw = (resp.get("message") or {}).get("content") or ""
+            raw = str(raw).strip()
+            if raw:
+                last_text = raw
+                return raw, True
+            time.sleep(min(5.0, 1.0 * (attempt + 1)))
+        except Exception as exc:  # pylint: disable=broad-except
+            llm_call_counter[0] += 1
+            if gc_interval > 0 and llm_call_counter[0] % gc_interval == 0:
+                gc.collect()
+                if gc_sleep > 0:
+                    time.sleep(gc_sleep)
+            wait = min(30.0, 2.0 * (attempt + 1))
+            print(f"[ollama] attempt {attempt + 1}/{max_retries} failed: {exc!s}; sleeping {wait:.1f}s")
+            time.sleep(wait)
+    return last_text if last_text else None, last_text is not None
+
+
 def generate_synthetic_dataset(
     off_path: Path,
     target_count: int = 3000,
@@ -225,6 +302,13 @@ def generate_synthetic_dataset(
     sample_seed: int = 7,
     stratify_by_nova: bool = False,
     eu_additives_url: str = DEFAULT_EU_ADDITIVES_URL,
+    ollama_timeout: float = 600.0,
+    max_retries: int = 3,
+    gc_interval: int = 100,
+    gc_sleep: float = 0.5,
+    progress_interval: int = 50,
+    shutdown: bool = False,
+    shutdown_file: Optional[Path] = None,
 ) -> None:
     ensure_output_dir()
     eu_additives = fetch_or_load_eu_additives(eu_url=eu_additives_url)
@@ -247,78 +331,145 @@ def generate_synthetic_dataset(
         print(f"Resume mode: found {len(existing_keys)} existing records in {output_path.name}")
     if len(existing_keys) >= target_count:
         print(f"Target already satisfied ({len(existing_keys)}/{target_count}). Nothing to do.")
+        if shutdown:
+            _write_shutdown_marker(
+                shutdown_file=shutdown_file or (output_path.parent / "generate_dataset_done.txt"),
+                output_path=output_path,
+                target_count=target_count,
+                final_accepted=len(existing_keys),
+                session_rejected=0,
+                session_products=0,
+                llm_calls=0,
+                status="already_complete",
+                exhausted=False,
+            )
         return
 
     accepted = len(existing_keys)
     cursor = 0
+    session_products = 0
+    session_rejected = 0
+    llm_calls: List[int] = [0]
+
+    client = ollama.Client(timeout=ollama_timeout)
+    chat_options = {"temperature": 0.2, "num_ctx": num_ctx}
 
     with output_path.open("a", encoding="utf-8") as f:
-        pbar = tqdm(total=target_count, desc="synthetic-cot")
-        pbar.update(min(accepted, target_count))
-        while accepted < target_count and cursor < len(candidate_indices):
-            batch_indices = candidate_indices[cursor : cursor + batch_size]
-            cursor += batch_size
+        pbar = tqdm(total=target_count, desc="synthetic-cot", initial=min(accepted, target_count))
+        try:
+            while accepted < target_count and cursor < len(candidate_indices):
+                batch_indices = candidate_indices[cursor : cursor + batch_size]
+                cursor += batch_size
 
-            for idx in batch_indices:
-                row = df.iloc[idx]
-                source_key = build_source_key(row)
-                if source_key in existing_keys:
-                    continue
-                ground_truth = int(row["nova_group"])
-                user_prompt = build_user_prompt(row, eu_additives)
+                for idx in batch_indices:
+                    if accepted >= target_count:
+                        break
+                    row = df.iloc[idx]
+                    source_key = build_source_key(row)
+                    if source_key in existing_keys:
+                        continue
+                    ground_truth = int(row["nova_group"])
+                    user_prompt = build_user_prompt(row, eu_additives)
 
-                resp = ollama.chat(
-                    model=model_name,
-                    messages=[
+                    messages = [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": user_prompt},
-                    ],
-                    options={
-                        "temperature": 0.2,
-                        "num_ctx": num_ctx,
-                    },
-                )
-                raw_text = resp.get("message", {}).get("content", "")
-                trace = parse_json_response(raw_text)
-                if not trace:
-                    continue
-                normalize_trace_ingredient_steps(trace)
+                    ]
 
-                if not verify_nova_label(trace, ground_truth):
-                    continue
+                    raw_text, _had_response = _ollama_chat_with_retries(
+                        client,
+                        model_name=model_name,
+                        messages=messages,
+                        options=chat_options,
+                        max_retries=max_retries,
+                        llm_call_counter=llm_calls,
+                        gc_interval=gc_interval,
+                        gc_sleep=gc_sleep,
+                    )
+                    trace = parse_json_response(raw_text or "")
+                    session_products += 1
 
-                enum_ok, enum_errors = verify_enumber_citations(trace, eu_additives)
-                if not enum_ok:
-                    continue
+                    if not trace:
+                        session_rejected += 1
+                        if progress_interval and session_products % progress_interval == 0:
+                            print(
+                                f"[summary] Accepted: {accepted}, Rejected: {session_rejected}, "
+                                f"Total products tried (session): {session_products}, LLM calls: {llm_calls[0]}"
+                            )
+                        continue
 
-                record = {
-                    "id": f"synthetic::{accepted + 1}",
-                    "source_key": source_key,
-                    "product_name": _scalarize(row.get("product_name", "Unknown Product")),
-                    "barcode": _scalarize(row.get("code")),
-                    "country": _scalarize(row.get("countries_en")),
-                    "ground_truth_nova_group": ground_truth,
-                    "ingredients_text": _scalarize(
-                        row.get("ingredients_clean", row.get("ingredients_text", ""))
-                    ),
-                    "trace": _json_safe(trace),
-                    "validation": {
-                        "nova_label_match": True,
-                        "enum_citation_ok": True,
-                        "enum_errors": _json_safe(enum_errors),
-                    },
-                }
-                f.write(json.dumps(_json_safe(record), ensure_ascii=False) + "\n")
-                existing_keys.add(source_key)
-                accepted += 1
-                pbar.update(1)
-                if accepted >= target_count:
-                    break
-        pbar.close()
+                    normalize_trace_ingredient_steps(trace)
 
-    print(f"Saved {accepted} traces to {output_path}")
-    if accepted < target_count:
+                    if not verify_nova_label(trace, ground_truth):
+                        session_rejected += 1
+                        if progress_interval and session_products % progress_interval == 0:
+                            print(
+                                f"[summary] Accepted: {accepted}, Rejected: {session_rejected}, "
+                                f"Total products tried (session): {session_products}, LLM calls: {llm_calls[0]}"
+                            )
+                        continue
+
+                    enum_ok, enum_errors = verify_enumber_citations(trace, eu_additives)
+                    if not enum_ok:
+                        session_rejected += 1
+                        if progress_interval and session_products % progress_interval == 0:
+                            print(
+                                f"[summary] Accepted: {accepted}, Rejected: {session_rejected}, "
+                                f"Total products tried (session): {session_products}, LLM calls: {llm_calls[0]}"
+                            )
+                        continue
+
+                    record = {
+                        "id": f"synthetic::{accepted + 1}",
+                        "source_key": source_key,
+                        "product_name": _scalarize(row.get("product_name", "Unknown Product")),
+                        "barcode": _scalarize(row.get("code")),
+                        "country": _scalarize(row.get("countries_en")),
+                        "ground_truth_nova_group": ground_truth,
+                        "ingredients_text": _scalarize(
+                            row.get("ingredients_clean", row.get("ingredients_text", ""))
+                        ),
+                        "trace": _json_safe(trace),
+                        "validation": {
+                            "nova_label_match": True,
+                            "enum_citation_ok": True,
+                            "enum_errors": _json_safe(enum_errors),
+                        },
+                    }
+                    f.write(json.dumps(_json_safe(record), ensure_ascii=False) + "\n")
+                    f.flush()
+                    existing_keys.add(source_key)
+                    accepted += 1
+                    pbar.update(1)
+
+                    if progress_interval and session_products % progress_interval == 0:
+                        print(
+                            f"[summary] Accepted: {accepted}, Rejected: {session_rejected}, "
+                            f"Total products tried (session): {session_products}, LLM calls: {llm_calls[0]}"
+                        )
+
+                    if accepted >= target_count:
+                        break
+        finally:
+            pbar.close()
+
+    exhausted = accepted < target_count
+    print(f"Saved {accepted} traces to {output_path} (session rejected products: {session_rejected})")
+    if exhausted:
         print("Warning: source data exhausted before hitting requested target count.")
+
+    if shutdown:
+        _write_shutdown_marker(
+            shutdown_file=shutdown_file or (output_path.parent / "generate_dataset_done.txt"),
+            output_path=output_path,
+            target_count=target_count,
+            final_accepted=accepted,
+            session_rejected=session_rejected,
+            session_products=session_products,
+            llm_calls=llm_calls[0],
+            status="exhausted_pool" if exhausted else "complete",
+            exhausted=exhausted,
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -336,7 +487,8 @@ def parse_args() -> argparse.Namespace:
             "the model only sees this pool. Use with --sample-seed for reproducibility.\n"
             "--sample-seed: Seed for subsampling the pool when --limit is set (matches data_pipeline.py convention).\n"
             "--seed: Shuffles candidate row order before generation (different from sample-seed).\n"
-            "Resume: if --output-path already exists, existing source_key values are skipped.\n"
+            "Resume: opens output in append mode; existing source_key values are never overwritten.\n"
+            "Overnight: use --gc-interval/--gc-sleep, --max-retries, --ollama-timeout, --progress-interval, --shutdown.\n"
         ),
     )
     parser.add_argument(
@@ -415,6 +567,53 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_EU_ADDITIVES_URL,
         help="Additives taxonomy URL if cache is missing (see data_pipeline).",
     )
+    parser.add_argument(
+        "--ollama-timeout",
+        type=float,
+        default=600.0,
+        metavar="SEC",
+        help="Per-request HTTP timeout for Ollama (default: 600). Increase for very long ingredient lists.",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        metavar="N",
+        help="Retry Ollama on timeout/empty/error up to N times per product (default: 3).",
+    )
+    parser.add_argument(
+        "--gc-interval",
+        type=int,
+        default=100,
+        metavar="N",
+        help="After every N LLM HTTP calls, run gc.collect() and optional sleep (default: 100; 0=disable).",
+    )
+    parser.add_argument(
+        "--gc-sleep",
+        type=float,
+        default=0.5,
+        metavar="SEC",
+        help="Seconds to sleep after each GC interval (default: 0.5; 0=skip sleep).",
+    )
+    parser.add_argument(
+        "--progress-interval",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Print [summary] Accepted/Rejected/Total every N products tried (default: 50).",
+    )
+    parser.add_argument(
+        "--shutdown",
+        action="store_true",
+        help="When the run finishes, write a small marker file (see --shutdown-file).",
+    )
+    parser.add_argument(
+        "--shutdown-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="Path for completion marker (default: data/processed/generate_dataset_done.txt).",
+    )
     return parser.parse_args()
 
 
@@ -432,4 +631,11 @@ if __name__ == "__main__":
         sample_seed=args.sample_seed,
         stratify_by_nova=args.stratify_by_nova,
         eu_additives_url=args.eu_additives_url,
+        ollama_timeout=args.ollama_timeout,
+        max_retries=args.max_retries,
+        gc_interval=args.gc_interval,
+        gc_sleep=args.gc_sleep,
+        progress_interval=args.progress_interval,
+        shutdown=args.shutdown,
+        shutdown_file=args.shutdown_file,
     )
