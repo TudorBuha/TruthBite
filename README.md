@@ -42,6 +42,8 @@ Prerequisites: Python 3.11+, [Docker Desktop](https://www.docker.com/products/do
    python scripts/analyze_dataset.py --dataset-path "data/processed/synthetic_cot_dataset.jsonl"
    ```
 
+   **Why the Ollama-generated file is not on GitHub:** the real output path `data/processed/synthetic_cot_dataset.jsonl` is listed in `.gitignore` (it can grow large and is easy to regenerate). The JSON Lines **schema** is illustrated in `examples/synthetic_cot_sample.jsonl`. For collaboration, share a full export via cloud storage or run the same command locally.
+
 Use `python scripts/data_pipeline.py --help` and `python scripts/generate_dataset.py --help` for all options.
 
 ## **Team handover**
