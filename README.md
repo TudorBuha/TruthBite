@@ -4,10 +4,49 @@
 
 **Team Name:** TruthBite  
 
-**Team Members:** Cocaina Mara, Ciobanu Eduarda, Bortos Alexia, Buha Tudor
-
  
  **RAG Solution Design Document**
+
+# **Getting Started**
+
+Prerequisites: Python 3.11+, [Docker Desktop](https://www.docker.com/products/docker-desktop/), and (for synthetic dataset generation) [Ollama](https://ollama.com/) with your chosen model pulled (e.g. `llama3.1:8b`).
+
+1. **Install Python dependencies** (from the repository root):
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Start Qdrant** (local vector database on port `6333`):
+
+   ```bash
+   docker compose up -d
+   ```
+
+   Check it is running: `docker ps`, or open [http://localhost:6333](http://localhost:6333).
+
+3. **Open Food Facts data** is not included in the repository. Download an Open Food Facts **Parquet** export manually (for example from [Hugging Face datasets](https://huggingface.co/datasets) — search for Open Food Facts / world food facts) and place the file under `data/raw/`, e.g. `data/raw/openfoodfacts.parquet`.
+
+4. **Run ingestion** (use `--limit` for a manageable subset; the full export is very large):
+
+   ```bash
+   python scripts/data_pipeline.py --open-food-facts-path "data/raw/openfoodfacts.parquet" --limit 5000 --stratify-by-nova --sample-seed 42
+   ```
+
+5. **Optional — synthetic CoT dataset** (requires Ollama running; output is gitignored by default):
+
+   ```bash
+   python scripts/generate_dataset.py --open-food-facts-path "data/raw/openfoodfacts.parquet" --target-count 100 --limit 1000 --sample-seed 42 --batch-size 2 --num-ctx 8192 --model-name "llama3.1:8b"
+   python scripts/analyze_dataset.py --dataset-path "data/processed/synthetic_cot_dataset.jsonl"
+   ```
+
+Use `python scripts/data_pipeline.py --help` and `python scripts/generate_dataset.py --help` for all options.
+
+## **Team handover**
+
+- **Fine-tuning / training data:** Validated chain-of-thought traces are written to `data/processed/synthetic_cot_dataset.jsonl` by `scripts/generate_dataset.py` (JSON Lines). That path is ignored by Git; each line is one record with `trace`, `ground_truth_nova_group`, and `validation` metadata. Regenerate or extend runs with the same flags; the generator supports resume (skips rows already present in the output file). Use `scripts/analyze_dataset.py` for a quick NOVA and citation report.
+
+- **RAG / retrieval:** After ingestion, Qdrant collections `ingredients_corpus` and `additives_corpus` hold embedded chunks. Use `scripts/retriever.py` as the starting point for Strategy 1 (dense-only) and Strategy 2 (hybrid + optional metadata filters such as country). Point `Retriever` at the same `qdrant_url` and `collection_name` you used when loading data (`ingredients_corpus` for product ingredient chunks).
 
 # **1\. Project Overview**
 
@@ -216,4 +255,40 @@ TruthBite's RAG solution is designed around the principle that verifiable scient
  
 
 The three-strategy evaluation framework ensures that each architectural enhancement can be measured and justified empirically before production deployment, with RAGAS metrics providing the objective grounding that TruthBite's own outputs are designed to provide for food labels.
+
+
+# **8\. Local Runbook (Pause / Resume)**
+
+Use this section when you want to stop work now and continue later
+
+## **8.1 Stop Everything Safely (Now)**
+
+From the project root:
+
+1. Stop Qdrant container:
+   - `docker compose down`
+2. Stop Ollama server (if running in a terminal):
+   - press `Ctrl + C` in that Ollama terminal
+3. Optional: close any terminal running data generation or ingestion scripts.
+
+Notes:
+- `docker compose down` stops containers but keeps your persistent Qdrant data in `data/qdrant_storage`.
+- Generated dataset files remain in `data/processed/`.
+
+## **8.2 Start Everything Later**
+
+From the project root:
+
+1. Start Qdrant:
+   - `docker compose up -d`
+2. Verify Qdrant is running:
+   - `docker ps`
+   - optional health check: open `http://localhost:6333`
+3. Start Ollama (if not already running as a background service):
+   - `ollama serve`
+4. Resume pipeline:
+   - Ingestion example:
+     - `python scripts/data_pipeline.py --open-food-facts-path "data/raw/openfoodfacts.parquet" --limit 5000 --stratify-by-nova --sample-seed 42`
+   - Synthetic generation example:
+     - `python scripts/generate_dataset.py --open-food-facts-path "data/raw/openfoodfacts.parquet" --target-count 100 --batch-size 4 --num-ctx 8192 --model-name "llama3.1:8b"`
 

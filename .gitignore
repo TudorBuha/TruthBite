@@ -205,3 +205,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# TruthBite local data (large / generated — not committed)
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*.jsonl
+!data/processed/.gitkeep
+data/qdrant_storage/
+
+# Secrets
+.env
+.env.*
+!.env.example

@@ -1,0 +1,10 @@
+ollama
+pandas
+qdrant-client
+sentence-transformers
+pyarrow
+fastapi
+uvicorn
+numpy
+requests
+tqdm
