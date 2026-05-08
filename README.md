@@ -4,6 +4,8 @@
 
 **Team Name:** TruthBite  
 
+**Team Members:** Cocaina Mara, Ciobanu Eduarda, Bortos Alexia, Buha Tudor
+
  
  **RAG Solution Design Document**
 
