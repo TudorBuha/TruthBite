@@ -1,0 +1,1 @@
+"""TruthBite application package."""

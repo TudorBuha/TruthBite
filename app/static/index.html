@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TruthBite</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://unpkg.com/html5-qrcode" defer></script>
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">TruthBite</p>
+        <h1>Scan a food barcode and check the label story.</h1>
+        <p>
+          The app fetches product data from Open Food Facts, estimates the NOVA verdict, and flags
+          marketing claims that may conflict with the ingredient list.
+        </p>
+      </section>
+
+      <section class="card controls">
+        <label for="barcode">Barcode</label>
+        <div class="input-row">
+          <input id="barcode" type="text" inputmode="numeric" placeholder="Example: 5449000000996" />
+          <button id="analyze-button">Analyze</button>
+        </div>
+        <div class="button-row">
+          <button id="scan-button" class="secondary">Scan with camera</button>
+          <button id="stop-scan-button" class="secondary hidden">Stop scanner</button>
+        </div>
+        <label class="checkbox-row">
+          <input id="use-model" type="checkbox" />
+          Use Task B fine-tuned model through Ollama
+        </label>
+        <p id="model-status" class="hint">Checking model status...</p>
+        <p class="hint">
+          Camera scanning needs HTTPS on a phone. For local testing, type the barcode manually.
+        </p>
+        <div id="scanner" class="scanner hidden"></div>
+      </section>
+
+      <p id="status" class="status"></p>
+
+      <section id="result" class="result-grid hidden">
+        <article class="card product-card">
+          <img id="product-image" alt="" class="product-image hidden" />
+          <div>
+            <p class="eyebrow">Product</p>
+            <h2 id="product-name"></h2>
+            <p id="product-brand" class="muted"></p>
+            <p id="product-meta"></p>
+          </div>
+        </article>
+
+        <article class="card verdict-card">
+          <p class="eyebrow">Verdict</p>
+          <h2 id="nova-verdict"></h2>
+          <p id="reasoning"></p>
+        </article>
+
+        <article class="card wide">
+          <p class="eyebrow">Greenwashing flags</p>
+          <div id="flags"></div>
+        </article>
+
+        <article id="model-card" class="card wide hidden">
+          <p class="eyebrow">Task B model output</p>
+          <div id="model-output"></div>
+        </article>
+
+        <article class="card wide">
+          <p class="eyebrow">Ingredients</p>
+          <p id="ingredients" class="ingredients"></p>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

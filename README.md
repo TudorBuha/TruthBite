@@ -27,6 +27,28 @@ Prerequisites: Python 3.11+, [Docker Desktop](https://www.docker.com/products/do
 
    Check it is running: `docker ps`, or open [http://localhost:6333](http://localhost:6333).
 
+### **Task D — Application demo**
+
+The app layer can be run without downloading the full Open Food Facts export. It uses the live Open Food Facts barcode API for demo lookups and falls back to rule-based analysis if Ollama is not running.
+
+Run locally:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+Open [http://localhost:8000](http://localhost:8000), type a barcode, and click **Analyze**. Camera barcode scanning works on `localhost`; for scanning from a phone, expose the app over HTTPS, for example with `ngrok http 8000`.
+
+By default the app uses a deterministic fallback analysis so the demo works even without Ollama. To use the Task B fine-tuned model, start Ollama, create the `truthbite-phi4` model from the instructions below, then enable **Use Task B fine-tuned model through Ollama** in the UI. The app checks model availability at `GET /api/model/status` and sends model-backed requests through `POST /api/analyze` with `use_model: true`. Model calls wait up to 180 seconds by default; override this with `OLLAMA_TIMEOUT` if local inference is slower.
+
+Run with Docker:
+
+```bash
+docker compose up --build
+```
+
+The backend is available at [http://localhost:8000](http://localhost:8000). If you want model-backed analysis, create the `truthbite-phi4` Ollama model as described below and keep Ollama running on the host.
+
 3. **Open Food Facts data** is not included in the repository. Download an Open Food Facts **Parquet** export manually (for example from [Hugging Face datasets](https://huggingface.co/datasets) — search for Open Food Facts / world food facts) and place the file under `data/raw/`, e.g. `data/raw/openfoodfacts.parquet`.
 
 4. **Run ingestion** (use `--limit` for a manageable subset; the full export is very large):
