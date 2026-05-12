@@ -29,7 +29,7 @@ class GreenwashingFlag(BaseModel):
 class AnalysisRequest(BaseModel):
     barcode: Optional[str] = None
     product: Optional[ProductData] = None
-    use_model: bool = False
+    use_model: bool = True
 
 
 class AnalysisResponse(BaseModel):

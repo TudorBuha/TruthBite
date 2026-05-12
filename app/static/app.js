@@ -2,7 +2,6 @@ const barcodeInput = document.querySelector("#barcode");
 const analyzeButton = document.querySelector("#analyze-button");
 const scanButton = document.querySelector("#scan-button");
 const stopScanButton = document.querySelector("#stop-scan-button");
-const useModelInput = document.querySelector("#use-model");
 const modelStatusEl = document.querySelector("#model-status");
 const scannerEl = document.querySelector("#scanner");
 const statusEl = document.querySelector("#status");
@@ -21,6 +20,16 @@ function setHidden(element, hidden) {
 
 function formatList(values) {
   return (values || []).filter(Boolean).join(", ");
+}
+
+function novaMeaning(novaGroup) {
+  const meanings = {
+    1: "Unprocessed or minimally processed food",
+    2: "Processed culinary ingredient",
+    3: "Processed food",
+    4: "Ultra-processed food",
+  };
+  return meanings[novaGroup] || "NOVA classification unavailable";
 }
 
 function renderFlags(flags) {
@@ -91,6 +100,7 @@ function renderResult(data) {
   document.querySelector("#nova-verdict").textContent = data.predicted_nova_group
     ? `NOVA ${data.predicted_nova_group}`
     : "No NOVA verdict";
+  document.querySelector("#nova-label").textContent = novaMeaning(data.predicted_nova_group);
   document.querySelector("#reasoning").textContent = data.reasoning_summary;
   document.querySelector("#ingredients").textContent = product.ingredients_text || "No ingredients listed.";
 
@@ -122,7 +132,7 @@ async function analyzeBarcode() {
     const response = await fetch("/api/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ barcode, use_model: useModelInput.checked }),
+      body: JSON.stringify({ barcode }),
     });
     const payload = await response.json();
     if (!response.ok) {
@@ -140,8 +150,8 @@ async function checkModelStatus() {
     const response = await fetch("/api/model/status");
     const payload = await response.json();
     modelStatusEl.textContent = payload.available
-      ? `Model ready: ${payload.model}`
-      : `Model not ready: ${payload.detail}`;
+      ? "AI analysis engine ready"
+      : `AI analysis unavailable: ${payload.detail}`;
     modelStatusEl.classList.toggle("error", !payload.available);
   } catch (error) {
     modelStatusEl.textContent = `Model status unavailable: ${error.message}`;

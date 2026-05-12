@@ -39,7 +39,7 @@ uvicorn app.main:app --reload
 
 Open [http://localhost:8000](http://localhost:8000), type a barcode, and click **Analyze**. Camera barcode scanning works on `localhost`; for scanning from a phone, expose the app over HTTPS, for example with `ngrok http 8000`.
 
-By default the app uses a deterministic fallback analysis so the demo works even without Ollama. To use the Task B fine-tuned model, start Ollama, create the `truthbite-phi4` model from the instructions below, then enable **Use Task B fine-tuned model through Ollama** in the UI. The app checks model availability at `GET /api/model/status` and sends model-backed requests through `POST /api/analyze` with `use_model: true`. Model calls wait up to 180 seconds by default; override this with `OLLAMA_TIMEOUT` if local inference is slower.
+By default the app uses the Task B fine-tuned `truthbite-phi4` model through Ollama. If Ollama is not running or the model call fails, the backend falls back to deterministic analysis so the demo still works. The app checks model availability at `GET /api/model/status`; model calls wait up to 180 seconds by default, which can be overridden with `OLLAMA_TIMEOUT`.
 
 Run with Docker:
 

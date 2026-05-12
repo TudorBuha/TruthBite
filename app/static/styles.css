@@ -160,6 +160,16 @@ button.secondary {
   grid-column: 1 / -1;
 }
 
+.nova-label {
+  display: inline-block;
+  border-radius: 999px;
+  background: #e5eee0;
+  color: #234420;
+  font-weight: 800;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+}
+
 .flag {
   border-left: 5px solid #c9831e;
   border-radius: 14px;
