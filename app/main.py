@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import List
 
@@ -13,6 +14,16 @@ from app.greenwashing import detect_greenwashing, fallback_nova_prediction
 from app.off_client import OpenFoodFactsError, fetch_product_by_barcode
 from app.schemas import AnalysisRequest, AnalysisResponse, ProductData
 from app.slm_client import OllamaClient
+
+# RAG pipeline - fallback if Qdrant is not available
+_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+try:
+    from pipeline import retrieve_context, validate_citations
+    _RAG_AVAILABLE = True
+except Exception:
+    _RAG_AVAILABLE = False
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -88,11 +99,42 @@ def analyze(request: AnalysisRequest) -> AnalysisResponse:
     if product.source_url:
         sources.append(product.source_url)
 
+    # RAG: retrieve additive context before calling the model
+    additive_context = "No retrieved additive context available."
+    if _RAG_AVAILABLE and product.ingredients_text:
+        try:
+            country = product.countries[0] if product.countries else None
+            additive_context, rag_sources = retrieve_context(
+                ingredients_text=product.ingredients_text,
+                country=country,
+                strategy=2,
+                top_k=5,
+            )
+            sources += rag_sources
+        except Exception as exc:
+            warnings.append(f"RAG retrieval failed, proceeding without context: {exc}")
+
     if request.use_model:
         try:
-            model_output = OllamaClient().analyze(product)
+            model_output = OllamaClient().analyze(product, additive_context=additive_context)
             predicted_nova = model_output.get("predicted_nova_group", predicted_nova)
             reasoning = model_output.get("reasoning_summary", reasoning)
+
+            if _RAG_AVAILABLE and model_output:
+                try:
+                    from qdrant_client import QdrantClient
+                    import os
+                    _qclient = QdrantClient(url=os.getenv("QDRANT_URL", "http://localhost:6333"), check_compatibility=False)
+                    valid, citation_errors = validate_citations(
+                        model_output.get("ingredient_steps", []), _qclient
+                    )
+                    if not valid:
+                        warnings.append(
+                            "Citation issues detected: " + "; ".join(citation_errors)
+                        )
+                except Exception:
+                    pass
+
         except (requests.RequestException, ValueError) as exc:
             warnings.append(f"Ollama model call failed, using fallback analysis: {exc}")
 
