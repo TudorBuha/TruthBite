@@ -8,3 +8,8 @@ uvicorn
 numpy
 requests
 tqdm
+scikit-learn
+ragas
+langchain-ollama
+langchain-community
+datasets
