@@ -167,15 +167,25 @@ No GPU or Python environment needed to run it — just Ollama.
 
 - **Fine-tuning / training data:** Validated chain-of-thought traces are written to `data/processed/synthetic_cot_dataset.jsonl` by `scripts/generate_dataset.py` (JSON Lines). That path is ignored by Git; each line is one record with `trace`, `ground_truth_nova_group`, and `validation` metadata. Regenerate or extend runs with the same flags; the generator supports resume (skips rows already present in the output file). Use `scripts/analyze_dataset.py` for a quick NOVA and citation report.
 
-- **RAG / retrieval:** The RAG pipeline is implemented in `scripts/pipeline.py` (Strategy 2 — Hybrid RAG with Metadata Filtering). At query time, `retrieve_context(ingredients_text, country)` does the following:
+- **RAG / retrieval:** The RAG pipeline is implemented in `scripts/pipeline.py` and supports two retrieval strategies, both exposed through the same `retrieve_context(ingredients_text, country, strategy)` function:
+
+  **Strategy 1 — Dense-only (baseline):**
   1. Extracts E-numbers from the ingredient list using a regex
-  2. Runs hybrid search (dense all-MiniLM-L6-v2 + in-process BM25) against `additives_corpus`
-  3. Runs a direct payload lookup for every E-number found in the text — guaranteeing definitions are included even when short codes score poorly in vector search
+  2. Embeds the full ingredient text with `all-MiniLM-L6-v2` and runs a nearest-neighbour search against `additives_corpus` (top 5 by cosine similarity)
+  3. Runs the same dense search against `cot_corpus` for similar past product reasoning examples (few-shot)
+  4. Returns results as-is without reranking — pure vector similarity ranking
+
+  **Strategy 2 — Hybrid RAG with Metadata Filtering (deployed in app):**
+  1. Extracts E-numbers from the ingredient list using a regex
+  2. Runs hybrid search (dense all-MiniLM-L6-v2 + in-process BM25) against `additives_corpus` — BM25 re-scores the dense pool to boost exact E-number keyword matches
+  3. Runs a direct payload lookup (`WHERE e_number = 'EXxx'`) for every E-number found in the text — guarantees definitions are included even when short codes score poorly in vector search
   4. Runs dense search against `cot_corpus` for similar past product reasoning examples (few-shot)
   5. Re-ranks all candidates with `cross-encoder/ms-marco-MiniLM-L-6-v2`, keeping top 5 additives + top 3 CoT examples
   6. Returns a formatted `additive_context` string and a `sources` list
 
-  The context string is injected into the SLM prompt before every model call (see `app/main.py`). If Qdrant is unreachable, the app falls back gracefully to "No retrieved additive context available."
+  The app (`app/main.py`) uses Strategy 2 by default. Pass `strategy=1` to `retrieve_context()` to use the dense-only baseline (used in RAGAS evaluation to measure the improvement).
+
+  The context string is injected into the SLM prompt before every model call. If Qdrant is unreachable, the app falls back gracefully to `"No retrieved additive context available."`
 
   After the model responds, `validate_citations(ingredient_steps, qdrant_client)` checks each cited E-number against `additives_corpus` and flags mismatches in the response `warnings` field.
 
@@ -191,6 +201,34 @@ No GPU or Python environment needed to run it — just Ollama.
   python scripts/ingest.py                   # real Qdrant on port 6333
   python scripts/ingest.py --in-memory       # ephemeral, no Docker needed
   ```
+
+  **RAG evaluation** (`scripts/evaluate_rag.py`) — compares three conditions on a stratified test subset: SLM with no RAG, Strategy 1 (dense), Strategy 2 (hybrid). Produces NOVA accuracy, citation validity, and RAGAS metrics (faithfulness, context precision/recall, answer correctness).
+
+  Prerequisites:
+
+  ```bash
+  pip install -r requirements.txt
+  docker compose up -d qdrant
+  python scripts/ingest.py
+  ollama serve
+  ollama pull llama3.1:8b
+  # truthbite-phi4 must be installed
+  ```
+
+  Run from the project root:
+
+  ```bash
+  # Full run — 100 examples, all metrics
+  python scripts/evaluate_rag.py
+
+  # Quick check — 20 examples, no RAGAS judge
+  python scripts/evaluate_rag.py --n-samples 20 --skip-ragas
+
+  # Custom output path
+  python scripts/evaluate_rag.py --output results/rag_eval.json
+  ```
+
+  The script saves a checkpoint to `results/rag_eval.json` after each condition (no RAG → Strategy 1 → Strategy 2), so a failed run does not lose completed work. Use `--judge-model llama3.1:8b` (default) to change the RAGAS judge. See `python scripts/evaluate_rag.py --help` for all options.
 
 # **1\. Project Overview**
 
