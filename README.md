@@ -230,6 +230,18 @@ No GPU or Python environment needed to run it — just Ollama.
 
   The script saves a checkpoint to `results/rag_eval.json` after each condition (no RAG → Strategy 1 → Strategy 2), so a failed run does not lose completed work. Use `--judge-model llama3.1:8b` (default) to change the RAGAS judge. See `python scripts/evaluate_rag.py --help` for all options.
 
+  **If the RAGAS phase crashed** (inference completed but RAGAS did not), re-run only the RAGAS part against the saved file without repeating inference:
+
+  ```bash
+  # Default — reads and writes results/rag_eval.json
+  python scripts/run_ragas_only.py
+
+  # If you moved the file
+  python scripts/run_ragas_only.py --input data/rag_eval_full.json
+  ```
+
+  `run_ragas_only.py` merges the RAGAS scores into the existing summary and checkpoints after each condition.
+
 # **1\. Project Overview**
 
 TruthBite is an autonomous agentic application that deconstructs food labels to identify Ultra-Processed Foods (UPF). Its reasoning core is a fine-tuned Small Language Model (SLM) that orchestrates specialized tools, distinguishing whole-food ingredients from industrial formulations and providing evidence-based verdicts on "natural" marketing claims.
