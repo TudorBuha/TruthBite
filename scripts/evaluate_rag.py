@@ -118,10 +118,11 @@ def load_test_split(n_samples: int = 100, seed: int = 42) -> List[Dict]:
 
 
 def record_to_product(rec: Dict) -> ProductData:
+    country = rec.get("country") or "United Kingdom"
     return ProductData(
         product_name=_extract_product_name(rec.get("product_name", "")),
         ingredients_text=_extract_ingredients_text(rec.get("ingredients_text", "")),
-        countries=[rec.get("country", "United Kingdom")],
+        countries=[str(country)],
         nova_group=rec.get("ground_truth_nova_group"),
     )
 
